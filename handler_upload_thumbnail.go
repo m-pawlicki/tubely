@@ -1,10 +1,12 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -41,14 +43,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
+
 	defer file.Close()
 
 	fileType := header.Header.Get("Content-Type")
-	fileBytes, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to read file", err)
-		return
-	}
+	ext := strings.Split(fileType, "image/")[1]
 
 	meta, err := cfg.db.GetVideo(videoID)
 	if userID != meta.UserID {
@@ -56,8 +55,15 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fileToString := base64.StdEncoding.EncodeToString(fileBytes)
-	dataURL := fmt.Sprintf("data:%s;base64,%s", fileType, fileToString)
+	fileName := fmt.Sprintf("%s.%s", meta.ID.String(), ext)
+	filePath := filepath.Join(cfg.assetsRoot, fileName)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't create file", err)
+		return
+	}
+	io.Copy(dst, file)
+	dataURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
 	meta.ThumbnailURL = &dataURL
 
 	err = cfg.db.UpdateVideo(meta)

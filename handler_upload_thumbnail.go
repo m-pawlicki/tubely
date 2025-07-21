@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -58,8 +60,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Invalid file type", err)
 		return
 	}
-
+	bytes := make([]byte, 32)
+	_, err = rand.Read(bytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't read bytes", err)
+		return
+	}
+	encoder := base64.RawURLEncoding
+	base := encoder.EncodeToString(bytes)
 	ext := strings.Split(mediaType, "image/")[1]
+	img := fmt.Sprintf("%s.%s", base, ext)
 
 	meta, err := cfg.db.GetVideo(videoID)
 	if userID != meta.UserID {
@@ -67,15 +77,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fileName := fmt.Sprintf("%s.%s", meta.ID.String(), ext)
-	filePath := filepath.Join(cfg.assetsRoot, fileName)
+	filePath := filepath.Join(cfg.assetsRoot, img)
 	dst, err := os.Create(filePath)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Couldn't create file", err)
 		return
 	}
 	io.Copy(dst, file)
-	dataURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
+	dataURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, img)
 	meta.ThumbnailURL = &dataURL
 
 	err = cfg.db.UpdateVideo(meta)

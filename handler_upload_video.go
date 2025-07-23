@@ -82,6 +82,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	io.Copy(tempFile, file)
 	tempFile.Seek(0, io.SeekStart)
 
+	processedVid, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't process file", err)
+		return
+	}
+	fastVid, err := os.Open(processedVid)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't open file", err)
+		return
+	}
+	defer fastVid.Close()
+	defer os.Remove(fastVid.Name())
+
 	bytes := make([]byte, 32)
 	_, err = rand.Read(bytes)
 	if err != nil {
@@ -113,7 +126,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	objParams := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &key,
-		Body:        tempFile,
+		Body:        fastVid,
 		ContentType: &fileType,
 	}
 	_, err = cfg.s3Client.PutObject(context.Background(), &objParams)
@@ -122,7 +135,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s/%s", cfg.s3Bucket, cfg.s3Region, aspect, vid)
+	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
 	meta.VideoURL = &vidURL
 
 	err = cfg.db.UpdateVideo(meta)
@@ -168,4 +181,14 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	default:
 		return "other", nil
 	}
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outputFile := filePath + ".processing"
+	cmdOut := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFile)
+	err := cmdOut.Run()
+	if err != nil {
+		return "", err
+	}
+	return outputFile, nil
 }

@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -90,9 +93,26 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	ext := strings.Split(mediaType, "video/")[1]
 	vid := fmt.Sprintf("%s.%s", base, ext)
 
+	ratio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	var aspect string
+	switch ratio {
+	case "16:9":
+		aspect = "landscape"
+	case "9:16":
+		aspect = "portrait"
+	default:
+		aspect = "other"
+	}
+
+	key := fmt.Sprintf("%s/%s", aspect, vid)
+
 	objParams := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
-		Key:         &vid,
+		Key:         &key,
 		Body:        tempFile,
 		ContentType: &fileType,
 	}
@@ -102,7 +122,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, vid)
+	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s/%s", cfg.s3Bucket, cfg.s3Region, aspect, vid)
 	meta.VideoURL = &vidURL
 
 	err = cfg.db.UpdateVideo(meta)
@@ -112,4 +132,40 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, meta)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+
+	type Video struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	commandOut := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var buf bytes.Buffer
+	commandOut.Stdout = &buf
+	err := commandOut.Run()
+	if err != nil {
+		return "", err
+	}
+
+	aspectRatio := Video{}
+	err = json.Unmarshal(buf.Bytes(), &aspectRatio)
+	if err != nil {
+		return "", err
+	}
+
+	width := aspectRatio.Streams[0].Width
+	height := aspectRatio.Streams[0].Height
+	ratio := width / height
+	switch ratio {
+	case 1:
+		return "16:9", nil
+	case 0:
+		return "9:16", nil
+	default:
+		return "other", nil
+	}
 }

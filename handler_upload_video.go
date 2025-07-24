@@ -39,12 +39,15 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	fmt.Println("uploading video", videoID, "by user", userID)
-
 	const maxMemory = 10 << 30
 	http.MaxBytesReader(w, r.Body, maxMemory)
 
 	meta, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Couldn't find video", err)
+		return
+	}
+
 	if userID != meta.UserID {
 		respondWithError(w, http.StatusUnauthorized, "Unathorized", err)
 		return
@@ -106,7 +109,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	ext := strings.Split(mediaType, "video/")[1]
 	vid := fmt.Sprintf("%s.%s", base, ext)
 
-	ratio, err := getVideoAspectRatio(tempFile.Name())
+	ratio, err := getVideoAspectRatio(fastVid.Name())
 	if err != nil {
 		fmt.Println(err.Error())
 		return
@@ -135,12 +138,18 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	vidURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
+	vidURL := fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
 	meta.VideoURL = &vidURL
 
-	err = cfg.db.UpdateVideo(meta)
+	/* 	err = cfg.db.UpdateVideo(meta)
+	   	if err != nil {
+	   		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+	   		return
+	   	} */
+
+	meta, err = cfg.dbVideoToSignedVideo(meta)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't sign video", err)
 		return
 	}
 
